@@ -1,1 +1,204 @@
+name: ANM Data Mirror
 
+on:
+  workflow_dispatch:
+
+  schedule:
+    # 05:20 horário de Brasília
+    - cron: "20 8 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: anm-data-mirror
+  cancel-in-progress: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+
+      - name: Baixar bases oficiais ANM
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p anm
+
+          baixar() {
+            URL="$1"
+            OUT="$2"
+
+            echo
+            echo "========================================"
+            echo "BAIXANDO: $OUT"
+            echo "========================================"
+
+            curl \
+              --fail \
+              --location \
+              --retry 6 \
+              --retry-all-errors \
+              --connect-timeout 30 \
+              --max-time 1200 \
+              -A "Mozilla/5.0 LimaGeoAnalise/1.0" \
+              "$URL" \
+              -o "anm/$OUT"
+
+            if [ ! -s "anm/$OUT" ]; then
+              echo "ERRO: arquivo vazio: $OUT"
+              exit 1
+            fi
+
+            ls -lh "anm/$OUT"
+          }
+
+          # ==================================================
+          # PROCESSOS MINERÁRIOS DO PARÁ
+          # ==================================================
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SIGMINE/PROCESSOS_MINERARIOS/PA.zip" \
+            "PA.zip"
+
+          # ==================================================
+          # CAMADAS COMPLEMENTARES SIGMINE
+          # ==================================================
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SIGMINE/BLOQUEIO.zip" \
+            "BLOQUEIO.zip"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SIGMINE/AREA_SERVIDAO.zip" \
+            "AREA_SERVIDAO.zip"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SIGMINE/ARRENDAMENTO.zip" \
+            "ARRENDAMENTO.zip"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SIGMINE/PROTECAO_FONTE.zip" \
+            "PROTECAO_FONTE.zip"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SIGMINE/RESERVAS_GARIMPEIRAS.zip" \
+            "RESERVAS_GARIMPEIRAS.zip"
+
+          # ==================================================
+          # SOPLE - DISPONIBILIDADE / OFERTA / LEILÃO
+          # ==================================================
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SOPLE/EstoqueAreas.csv" \
+            "EstoqueAreas.csv"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SOPLE/ResultadoRodadaDisponibilidade.csv" \
+            "ResultadoRodadaDisponibilidade.csv"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SOPLE/InteressadoParticipante.csv" \
+            "InteressadoParticipante.csv"
+
+          baixar \
+            "https://dadosabertos.anm.gov.br/SOPLE/ResultadoAvaliacaoSocial.csv" \
+            "ResultadoAvaliacaoSocial.csv"
+
+          # ==================================================
+          # VALIDAR ZIPS
+          # ==================================================
+
+          echo
+          echo "VALIDANDO ARQUIVOS..."
+
+          unzip -t anm/PA.zip >/dev/null
+          unzip -t anm/BLOQUEIO.zip >/dev/null
+          unzip -t anm/AREA_SERVIDAO.zip >/dev/null
+          unzip -t anm/ARRENDAMENTO.zip >/dev/null
+          unzip -t anm/PROTECAO_FONTE.zip >/dev/null
+          unzip -t anm/RESERVAS_GARIMPEIRAS.zip >/dev/null
+
+          echo "ZIPS VALIDOS."
+
+          # ==================================================
+          # METADADOS
+          # ==================================================
+
+          date -u +"%Y-%m-%dT%H:%M:%SZ" \
+            > anm/UPDATED_AT_UTC.txt
+
+          (
+            cd anm
+            sha256sum \
+              PA.zip \
+              BLOQUEIO.zip \
+              AREA_SERVIDAO.zip \
+              ARRENDAMENTO.zip \
+              PROTECAO_FONTE.zip \
+              RESERVAS_GARIMPEIRAS.zip \
+              EstoqueAreas.csv \
+              ResultadoRodadaDisponibilidade.csv \
+              InteressadoParticipante.csv \
+              ResultadoAvaliacaoSocial.csv \
+              > SHA256SUMS.txt
+          )
+
+          echo
+          echo "PACOTE FINAL:"
+          ls -lh anm/
+
+      - name: Publicar dados atuais
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="anm-current"
+
+          echo
+          echo "========================================"
+          echo "PUBLICANDO RELEASE $TAG"
+          echo "========================================"
+
+          if gh release view "$TAG" >/dev/null 2>&1
+          then
+
+            echo "Release existente."
+
+            gh release edit "$TAG" \
+              --title "ANM - Dados atuais" \
+              --notes "Espelho automático das bases públicas oficiais da ANM utilizadas pelo Lima GeoAnálise."
+
+          else
+
+            echo "Criando primeira release."
+
+            gh release create "$TAG" \
+              --title "ANM - Dados atuais" \
+              --notes "Espelho automático das bases públicas oficiais da ANM utilizadas pelo Lima GeoAnálise." \
+              --latest=false
+
+          fi
+
+          gh release upload "$TAG" \
+            anm/PA.zip \
+            anm/BLOQUEIO.zip \
+            anm/AREA_SERVIDAO.zip \
+            anm/ARRENDAMENTO.zip \
+            anm/PROTECAO_FONTE.zip \
+            anm/RESERVAS_GARIMPEIRAS.zip \
+            anm/EstoqueAreas.csv \
+            anm/ResultadoRodadaDisponibilidade.csv \
+            anm/InteressadoParticipante.csv \
+            anm/ResultadoAvaliacaoSocial.csv \
+            anm/UPDATED_AT_UTC.txt \
+            anm/SHA256SUMS.txt \
+            --clobber
+
+          echo
+          echo "ANM MIRROR ATUALIZADO."
