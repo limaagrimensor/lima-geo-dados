@@ -201,3 +201,21 @@ jobs:
 
           echo
           echo "ANM MIRROR ATUALIZADO."
+      - name: Manter workflow agendado ativo
+        if: always() && github.event_name == 'schedule'
+        shell: bash
+        run: |
+          # Cria atividade no repositório somente no primeiro dia de cada mês
+          if [ "$(date -u +%d)" != "01" ]; then
+            echo "Hoje não é dia de keepalive."
+            exit 0
+          fi
+
+          git clone "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" keepalive-repo
+          cd keepalive-repo
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit --allow-empty -m "chore: mantém automação ANM ativa"
+          git push origin HEAD:main
